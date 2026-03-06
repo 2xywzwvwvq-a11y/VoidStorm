@@ -1577,7 +1577,6 @@ function enemyShoot(e) {
       const a = e.spinAngle + (Math.PI * 2 / 6) * i;
       fireEnemyBullet(e.x, e.y, a, 2 * spdScale, '#ffaa00', 3);
     }
-    e.spinAngle += 0.3;
   }
   else if (e.type === 'burst') {
     for (let i = 0; i < 12; i++) {

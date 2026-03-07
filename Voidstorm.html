@@ -879,6 +879,7 @@ let player = {};
 let playerBullets = [];
 let enemies = [];
 let enemyBullets = [];
+let bossLasers = [];
 let particles = [];
 let xpGems = [];
 let pickupTexts = [];
@@ -1405,6 +1406,7 @@ function resetGame() {
   playerBullets = [];
   enemies = [];
   enemyBullets = [];
+  bossLasers = [];
   particles = [];
   xpGems = [];
   pickupTexts = [];
@@ -1588,24 +1590,49 @@ function enemyShoot(e) {
     fireEnemyBullet(e.x, e.y, angleToPlayer, 5 * spdScale, '#00ffff', 4);
   }
   else if (e.type === 'boss') {
-    // Multi-pattern boss
-    const pattern = Math.floor(e.age / 120) % 3;
-    if (pattern === 0) {
+    const phase = Math.floor(e.age / 150) % 5;
+    if (phase === 0) {
+      // Spinning 16-bullet ring
       for (let i = 0; i < 16; i++) {
         const a = (Math.PI * 2 / 16) * i + e.spinAngle;
         fireEnemyBullet(e.x, e.y, a, 2 * spdScale, '#ff0044', 4);
       }
       e.spinAngle += 0.15;
-    } else if (pattern === 1) {
-      for (let i = 0; i < 5; i++) {
-        const a = angleToPlayer + (i - 2) * 0.15;
-        fireEnemyBullet(e.x, e.y, a, 3 * spdScale, '#ffaa00', 3);
+    } else if (phase === 1) {
+      // Rapid wide fan aimed at player
+      for (let i = 0; i < 7; i++) {
+        const a = angleToPlayer + (i - 3) * 0.22;
+        fireEnemyBullet(e.x, e.y, a, 3.5 * spdScale, '#ffaa00', 3);
       }
-    } else {
+    } else if (phase === 2) {
+      // Laser beam — spawn a sweeping charge laser
+      bossLasers.push({
+        bossRef: e,
+        x: e.x, y: e.y,
+        angle: angleToPlayer + (Math.random() - 0.5) * 1.2,
+        chargeTimer: 70,
+        activeTimer: 0,
+        width: 14
+      });
+    } else if (phase === 3) {
+      // Dense omnidirectional burst + aimed triples
       for (let i = 0; i < 24; i++) {
-        const a = (Math.PI * 2 / 24) * i;
-        fireEnemyBullet(e.x, e.y, a, 1.5 * spdScale, '#ff00ff', 2);
+        const a = (Math.PI * 2 / 24) * i + e.spinAngle;
+        fireEnemyBullet(e.x, e.y, a, 1.5 * spdScale, '#ff00ff', 2.5);
       }
+      for (let i = 0; i < 3; i++) {
+        const a = angleToPlayer + (i - 1) * 0.28;
+        fireEnemyBullet(e.x, e.y, a, 3.5 * spdScale, '#ff8800', 3.5);
+      }
+      e.spinAngle += 0.2;
+    } else {
+      // Double cross spiral
+      for (let i = 0; i < 4; i++) {
+        const a = e.spinAngle + (Math.PI * 2 / 4) * i;
+        fireEnemyBullet(e.x, e.y, a, 2.5 * spdScale, '#ff0044', 3.5);
+        fireEnemyBullet(e.x, e.y, a + Math.PI / 4, 1.6 * spdScale, '#ffaa00', 2.5);
+      }
+      e.spinAngle += 0.08;
     }
   }
 }
@@ -1877,6 +1904,7 @@ function update(dt) {
             slowMoTimer = 40;
             screenShake = Math.max(screenShake, 20);
             chromaticAberration = 6;
+            bossLasers = bossLasers.filter(l => l.bossRef !== e);
           }
           
           enemies.splice(j, 1);
@@ -1931,7 +1959,8 @@ function update(dt) {
     
     // Fire
     e.fireTimer -= slowMo;
-    const fireInterval = e.type === 'boss' ? 35 : (e.type === 'spinner' ? 55 : (e.type === 'burst' ? 120 : (e.type === 'sniper' ? 100 : 70)));
+    const bossPhase = e.type === 'boss' ? Math.floor(e.age / 150) % 5 : 0;
+    const fireInterval = e.type === 'boss' ? (bossPhase === 2 ? 120 : 35) : (e.type === 'spinner' ? 55 : (e.type === 'burst' ? 120 : (e.type === 'sniper' ? 100 : 70)));
     if (e.fireTimer <= 0) {
       e.fireTimer = fireInterval;
       enemyShoot(e);
@@ -1989,6 +2018,68 @@ function update(dt) {
     }
   }
   
+  // ---- Boss lasers ----
+  for (let i = bossLasers.length - 1; i >= 0; i--) {
+    const laser = bossLasers[i];
+    if (laser.chargeTimer > 0) {
+      laser.chargeTimer -= slowMo;
+      laser.x = laser.bossRef.x;
+      laser.y = laser.bossRef.y;
+      // Slowly sweep toward player during charge
+      const ta = Math.atan2(player.y - laser.y, player.x - laser.x);
+      let diff = ta - laser.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      laser.angle += diff * 0.025 * slowMo;
+      if (laser.chargeTimer <= 0) {
+        laser.activeTimer = 50;
+        screenShake = Math.max(screenShake, 8);
+        screenFlash = 0.3;
+      }
+    } else if (laser.activeTimer > 0) {
+      laser.activeTimer -= slowMo;
+      laser.x = laser.bossRef.x;
+      laser.y = laser.bossRef.y;
+      // Player collision: point-to-ray perpendicular distance
+      if (player.invuln <= 0) {
+        const px = player.x - laser.x;
+        const py = player.y - laser.y;
+        const proj = px * Math.cos(laser.angle) + py * Math.sin(laser.angle);
+        const perp = Math.abs(-px * Math.sin(laser.angle) + py * Math.cos(laser.angle));
+        if (proj > 0 && perp < laser.width / 2 + 8) {
+          player.hp -= 0.25;
+          player.invuln = 10;
+          screenShake = Math.max(screenShake, 5);
+          screenFlash = 0.2;
+          sfxPlayerHit();
+          spawnParticles(player.x, player.y, 6, '#ff0044', 5, 20);
+          if (player.hp <= 0.01) {
+            gameState = 'dead';
+            document.body.classList.remove('playing');
+            spawnExplosion(player.x, player.y, 3);
+            spawnExplosion(player.x, player.y, 2);
+            spawnKillRing(player.x, player.y, '#ff0044');
+            spawnKillRing(player.x, player.y, '#ffffff');
+            screenShake = 25;
+            chromaticAberration = 10;
+            slowMo = 0.15;
+            slowMoTimer = 35;
+            document.getElementById('death-score').textContent = score;
+            document.getElementById('death-wave').textContent = wave;
+            document.getElementById('death-stage').textContent = getStage().name;
+            document.getElementById('death-kills').textContent = kills;
+            document.getElementById('death-level').textContent = level;
+            document.getElementById('death-screen').style.display = 'flex';
+            storeAwardCredits(Math.floor(score / 10));
+          }
+        }
+      }
+      if (laser.activeTimer <= 0) bossLasers.splice(i, 1);
+    } else {
+      bossLasers.splice(i, 1);
+    }
+  }
+
   // ---- XP Gems ----
   for (let i = xpGems.length - 1; i >= 0; i--) {
     const g = xpGems[i];
@@ -2827,7 +2918,57 @@ function render() {
 
     ctx.restore();
   }
-  
+
+  // Boss lasers
+  for (const laser of bossLasers) {
+    const len = Math.max(W, H) * 2;
+    const ex = laser.x + Math.cos(laser.angle) * len;
+    const ey = laser.y + Math.sin(laser.angle) * len;
+    ctx.save();
+    ctx.lineCap = 'round';
+    if (laser.chargeTimer > 0) {
+      const pulse = 0.35 + Math.sin(bgTime * 0.45) * 0.25;
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = '#ff4400';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 8]);
+      ctx.beginPath();
+      ctx.moveTo(laser.x, laser.y);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = pulse * 0.9;
+      ctx.fillStyle = '#ff2200';
+      ctx.beginPath();
+      ctx.arc(laser.x, laser.y, 7, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (laser.activeTimer > 0) {
+      const elapsed = 50 - laser.activeTimer;
+      const fadeIn = Math.min(elapsed / 5, 1);
+      const fadeOut = Math.min(laser.activeTimer / 6, 1);
+      const intensity = fadeIn * fadeOut;
+      // Outer glow
+      ctx.globalAlpha = 0.1 * intensity;
+      ctx.strokeStyle = '#ff0044';
+      ctx.lineWidth = laser.width * 6;
+      ctx.beginPath(); ctx.moveTo(laser.x, laser.y); ctx.lineTo(ex, ey); ctx.stroke();
+      // Mid beam
+      ctx.globalAlpha = 0.55 * intensity;
+      ctx.strokeStyle = '#ff3366';
+      ctx.lineWidth = laser.width;
+      ctx.beginPath(); ctx.moveTo(laser.x, laser.y); ctx.lineTo(ex, ey); ctx.stroke();
+      // Core
+      ctx.globalAlpha = 0.95 * intensity;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = laser.width * 0.28;
+      ctx.beginPath(); ctx.moveTo(laser.x, laser.y); ctx.lineTo(ex, ey); ctx.stroke();
+      // Origin flash
+      ctx.globalAlpha = intensity;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(laser.x, laser.y, laser.width * 0.7, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
 
   // Player
   if (gameState !== 'dead') {
